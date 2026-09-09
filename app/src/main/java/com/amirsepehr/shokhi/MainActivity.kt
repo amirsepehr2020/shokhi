@@ -1,11 +1,11 @@
 package com.amirsepehr.shokhi
 
-import android.content.Context
+import android.Manifest
+import android.app.Activity
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.os.PowerManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -17,123 +17,61 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.abs
-import java.net.HttpURLConnection
-import java.net.URL
-
-private const val API_URL = "https://shokhi-site.sepehr2sodoury.workers.dev/api/status"
 
 class MainActivity : ComponentActivity() {
-    private val reporter by lazy { StatusReporter(this) }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { ShokhiApp(reporter) }
+        setContent { CalculatorApp() }
     }
 
-    override fun onResume() {
-        super.onResume()
-        reporter.start()
-    }
-
-    override fun onPause() {
-        reporter.sendNow(screenOn = false)
-        reporter.stop()
-        super.onPause()
-    }
-}
-
-private class StatusReporter(private val context: Context) {
-    private val handler = Handler(Looper.getMainLooper())
-    private val prefs = context.getSharedPreferences("shokhi", Context.MODE_PRIVATE)
-    private var running = false
-    private val task = object : Runnable {
-        override fun run() {
-            if (!running || !prefs.getBoolean("sharing", false)) return
-            sendNow(isScreenInteractive())
-            handler.postDelayed(this, 15_000L)
-        }
-    }
-
-    fun start() {
-        running = true
-        handler.removeCallbacks(task)
-        if (prefs.getBoolean("sharing", false)) {
-            sendNow(isScreenInteractive())
-            handler.postDelayed(task, 15_000L)
-        }
-    }
-
-    fun stop() {
-        running = false
-        handler.removeCallbacks(task)
-    }
-
-    fun sendNow(screenOn: Boolean = isScreenInteractive()) {
-        if (!prefs.getBoolean("sharing", false)) return
-        val user = prefs.getString("user", null) ?: return
-        Thread {
-            try {
-                val connection = URL(API_URL).openConnection() as HttpURLConnection
-                connection.requestMethod = "POST"
-                connection.connectTimeout = 5000
-                connection.readTimeout = 5000
-                connection.doOutput = true
-                connection.setRequestProperty("Content-Type", "application/json")
-                val payload = "{\"user\":\"$user\",\"screenOn\":$screenOn}"
-                connection.outputStream.use { it.write(payload.toByteArray()) }
-                connection.inputStream.close()
-                connection.disconnect()
-            } catch (_: Exception) {
-                // Status sharing is best-effort; calculator remains fully offline-capable.
-            }
-        }.start()
-    }
-
-    fun setSharing(enabled: Boolean) {
+    private fun setSharing(enabled: Boolean) {
+        val prefs = getSharedPreferences("shokhi", MODE_PRIVATE)
         prefs.edit().putBoolean("sharing", enabled).apply()
-        if (enabled) start() else stop()
+        val intent = Intent(this, StatusService::class.java).setAction(
+            if (enabled) StatusService.ACTION_START else StatusService.ACTION_STOP
+        )
+        if (enabled) {
+            if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1001)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
+        } else {
+            stopService(intent)
+        }
     }
 
-    fun setUser(user: String) { prefs.edit().putString("user", user).apply() }
-    fun getUser(): String? = prefs.getString("user", null)
-    fun isSharing(): Boolean = prefs.getBoolean("sharing", false)
-
-    private fun isScreenInteractive(): Boolean {
-        val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-        return pm.isInteractive
-    }
+    fun sharingSetter(): (Boolean) -> Unit = ::setSharing
 }
 
-private fun detectUser(): String = if (Build.MANUFACTURER.equals("samsung", ignoreCase = true)) "sepehr" else "amir"
-
 @Composable
-private fun ShokhiApp(reporter: StatusReporter) {
+private fun CalculatorApp() {
+    val activity = androidx.compose.ui.platform.LocalContext.current as Activity
+    val prefs = remember { activity.getSharedPreferences("shokhi", Activity.MODE_PRIVATE) }
+    val detectedUser = remember { if (Build.MANUFACTURER.equals("samsung", true)) "Sepehr" else "Amir" }
+    val sharingState = remember { mutableStateOf(prefs.getBoolean("sharing", false)) }
+
     MaterialTheme(colorScheme = darkColorScheme()) {
-        Surface(modifier = Modifier.fillMaxSize()) {
-            val user = remember { mutableStateOf(reporter.getUser()) }
-            LaunchedEffect(Unit) {
-                if (user.value == null) {
-                    val detected = detectUser()
-                    reporter.setUser(detected)
-                    user.value = detected
+        Surface(Modifier.fillMaxSize()) {
+            CalculatorScreen(
+                user = detectedUser,
+                sharing = sharingState.value,
+                onSharingChanged = {
+                    sharingState.value = it
+                    (activity as MainActivity).sharingSetter()(it)
                 }
-            }
-            if (user.value == null) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-            } else {
-                CalculatorScreen(reporter)
-            }
+            )
         }
     }
 }
 
 @Composable
-private fun CalculatorScreen(reporter: StatusReporter) {
+private fun CalculatorScreen(user: String, sharing: Boolean, onSharingChanged: (Boolean) -> Unit) {
     var display by remember { mutableStateOf("0") }
     var stored by remember { mutableStateOf<Double?>(null) }
     var operation by remember { mutableStateOf<Char?>(null) }
     var waiting by remember { mutableStateOf(false) }
-    var sharing by remember { mutableStateOf(reporter.isSharing()) }
+    var memory by remember { mutableStateOf(0.0) }
+    var history by remember { mutableStateOf(listOf<String>()) }
 
     fun inputDigit(digit: String) { display = if (waiting || display == "0") digit else display + digit; waiting = false }
     fun inputDecimal() { if (waiting) { display = "0."; waiting = false } else if (!display.contains('.')) display += "." }
@@ -147,42 +85,60 @@ private fun CalculatorScreen(reporter: StatusReporter) {
     }
     fun equals() {
         val left = stored ?: return; val right = display.toDoubleOrNull() ?: return; val op = operation ?: return
-        display = formatNumber(calculate(left, right, op)); stored = null; operation = null; waiting = true
+        val result = calculate(left, right, op)
+        history = (history + "${formatNumber(left)} $op ${formatNumber(right)} = ${formatNumber(result)}").takeLast(12)
+        display = formatNumber(result); stored = null; operation = null; waiting = true
     }
 
-    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 22.dp), verticalArrangement = Arrangement.Bottom) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 18.dp), verticalArrangement = Arrangement.Bottom) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Shokhi", style = MaterialTheme.typography.titleLarge)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(if (sharing) "Sharing" else "Private", fontSize = 12.sp)
-                Spacer(Modifier.width(4.dp))
-                Switch(checked = sharing, onCheckedChange = { sharing = it; reporter.setSharing(it) })
+            Column {
+                Text("ماشین حساب", style = MaterialTheme.typography.headlineSmall)
+                Text("$user  •  ${if (sharing) "اشتراک وضعیت روشن" else "خصوصی"}", fontSize = 12.sp)
             }
+            Switch(checked = sharing, onCheckedChange = onSharingChanged)
+        }
+        Spacer(Modifier.height(8.dp))
+        if (history.isNotEmpty()) {
+            Text("آخرین محاسبه: ${history.last()}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+            Spacer(Modifier.height(6.dp))
+        }
+        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(28.dp)) {
+            Box(Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.CenterEnd) { Text(display, fontSize = 46.sp, maxLines = 1) }
         }
         Spacer(Modifier.height(10.dp))
-        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(28.dp)) {
-            Box(Modifier.fillMaxWidth().padding(22.dp), contentAlignment = Alignment.CenterEnd) { Text(display, fontSize = 48.sp, maxLines = 1) }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("MC", "MR", "M+", "M-").forEach { label ->
+                OutlinedButton(onClick = {
+                    when (label) {
+                        "MC" -> memory = 0.0
+                        "MR" -> { display = formatNumber(memory); waiting = true }
+                        "M+" -> memory += display.toDoubleOrNull() ?: 0.0
+                        "M-" -> memory -= display.toDoubleOrNull() ?: 0.0
+                    }
+                }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(16.dp)) { Text(label, fontSize = 13.sp) }
+            }
         }
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(8.dp))
         val rows = listOf(listOf("AC", "±", "%", "÷"), listOf("7", "8", "9", "×"), listOf("4", "5", "6", "−"), listOf("1", "2", "3", "+"), listOf("0", ".", "⌫", "="))
         rows.forEach { row ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 row.forEach { label ->
                     Button(onClick = {
                         when (label) {
                             "AC" -> clear()
                             "±" -> display = formatNumber(-(display.toDoubleOrNull() ?: 0.0))
                             "%" -> display = formatNumber((display.toDoubleOrNull() ?: 0.0) / 100.0)
-                            "÷", "×", "−", "+" -> chooseOp(label.first().let { if (it == '×') '*' else if (it == '−') '-' else it })
+                            "÷", "×", "−", "+" -> chooseOp(if (label == "×") '*' else if (label == "−") '-' else label.first())
                             "=" -> equals()
                             "." -> inputDecimal()
                             "⌫" -> if (!waiting) display = if (display.length > 1) display.dropLast(1) else "0"
                             else -> inputDigit(label)
                         }
-                    }, modifier = Modifier.weight(1f).height(68.dp), shape = RoundedCornerShape(22.dp)) { Text(label, fontSize = 22.sp) }
+                    }, modifier = Modifier.weight(1f).height(62.dp), shape = RoundedCornerShape(20.dp)) { Text(label, fontSize = 21.sp) }
                 }
             }
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
         }
     }
 }
