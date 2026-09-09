@@ -1,6 +1,7 @@
 package com.amirsepehr.shokhi
 
 import android.content.Context
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -103,37 +104,26 @@ private class StatusReporter(private val context: Context) {
     }
 }
 
+private fun detectUser(): String = if (Build.MANUFACTURER.equals("samsung", ignoreCase = true)) "sepehr" else "amir"
+
 @Composable
 private fun ShokhiApp(reporter: StatusReporter) {
     MaterialTheme(colorScheme = darkColorScheme()) {
         Surface(modifier = Modifier.fillMaxSize()) {
             val user = remember { mutableStateOf(reporter.getUser()) }
-            if (user.value == null) {
-                IdentityScreen { selected ->
-                    reporter.setUser(selected)
-                    user.value = selected
+            LaunchedEffect(Unit) {
+                if (user.value == null) {
+                    val detected = detectUser()
+                    reporter.setUser(detected)
+                    user.value = detected
                 }
+            }
+            if (user.value == null) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             } else {
                 CalculatorScreen(reporter)
             }
         }
-    }
-}
-
-@Composable
-private fun IdentityScreen(onSelected: (String) -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(28.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text("Shokhi", style = MaterialTheme.typography.displaySmall)
-        Spacer(Modifier.height(8.dp))
-        Text("Choose your profile", style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(24.dp))
-        Button(onClick = { onSelected("sepehr") }, modifier = Modifier.fillMaxWidth().height(58.dp), shape = RoundedCornerShape(20.dp)) { Text("Sepehr") }
-        Spacer(Modifier.height(12.dp))
-        OutlinedButton(onClick = { onSelected("amir") }, modifier = Modifier.fillMaxWidth().height(58.dp), shape = RoundedCornerShape(20.dp)) { Text("Amir") }
     }
 }
 
