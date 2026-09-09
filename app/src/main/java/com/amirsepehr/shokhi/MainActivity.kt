@@ -19,7 +19,7 @@ import kotlin.math.abs
 import java.net.HttpURLConnection
 import java.net.URL
 
-private const val API_URL = "https://REPLACE-WITH-YOUR-CLOUDFLARE-DOMAIN/api/status"
+private const val API_URL = "https://shokhi-site.sepehr2sodoury.workers.dev/api/status"
 
 class MainActivity : ComponentActivity() {
     private val reporter by lazy { StatusReporter(this) }
