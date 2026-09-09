@@ -3,7 +3,6 @@ package com.amirsepehr.shokhi
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import java.net.HttpURLConnection
@@ -27,10 +26,6 @@ class StatusService : Service() {
             sendStatus()
             handler.postDelayed(this, INTERVAL_MS)
         }
-    }
-
-    override fun onCreate() {
-        super.onCreate()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -82,7 +77,6 @@ class BootReceiver : android.content.BroadcastReceiver() {
         val prefs = context.getSharedPreferences("shokhi", Context.MODE_PRIVATE)
         if (!prefs.getBoolean("sharing", false)) return
         val serviceIntent = Intent(context, StatusService::class.java).setAction(StatusService.ACTION_START)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(serviceIntent)
-        else context.startService(serviceIntent)
+        context.startService(serviceIntent)
     }
 }
