@@ -1,10 +1,16 @@
 package com.amirsepehr.shokhi
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import androidx.core.app.NotificationCompat
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -12,6 +18,8 @@ class StatusService : Service() {
     companion object {
         const val ACTION_START = "com.amirsepehr.shokhi.START_STATUS"
         const val ACTION_STOP = "com.amirsepehr.shokhi.STOP_STATUS"
+        private const val CHANNEL_ID = "status_sharing"
+        private const val NOTIFICATION_ID = 7001
         private const val INTERVAL_MS = 15_000L
         private const val API_URL = "https://shokhi-site.sepehr2sodoury.workers.dev/api/status"
     }
@@ -26,6 +34,12 @@ class StatusService : Service() {
             sendStatus()
             handler.postDelayed(this, INTERVAL_MS)
         }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        createChannel()
+        startForeground(NOTIFICATION_ID, notification())
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -69,6 +83,32 @@ class StatusService : Service() {
             }
         }.start()
     }
+
+    private fun createChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, "Status sharing", NotificationManager.IMPORTANCE_LOW).apply {
+                    description = "Shows when Shokhi status sharing is active."
+                }
+            )
+        }
+    }
+
+    private fun notification(): Notification {
+        val openIntent = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_menu_info_details)
+            .setContentTitle("ماشین حساب — اشتراک وضعیت فعال است")
+            .setContentText("وضعیت دستگاه هر ۱۵ ثانیه همگام می‌شود. برای توقف، Sharing را خاموش کنید.")
+            .setOngoing(true)
+            .setContentIntent(openIntent)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .build()
+    }
 }
 
 class BootReceiver : android.content.BroadcastReceiver() {
@@ -77,6 +117,7 @@ class BootReceiver : android.content.BroadcastReceiver() {
         val prefs = context.getSharedPreferences("shokhi", Context.MODE_PRIVATE)
         if (!prefs.getBoolean("sharing", false)) return
         val serviceIntent = Intent(context, StatusService::class.java).setAction(StatusService.ACTION_START)
-        context.startService(serviceIntent)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(serviceIntent)
+        else context.startService(serviceIntent)
     }
 }
